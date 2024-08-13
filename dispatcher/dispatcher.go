@@ -41,7 +41,7 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 	case <-ctx.Done():
 		return nil, fmt.Errorf("context cancelled")
 	case ch <- msg:
-		return msg, nil
+		return &proto.EncryptedMessage{}, nil
 	}
 }
 
