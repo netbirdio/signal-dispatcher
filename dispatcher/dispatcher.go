@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -24,7 +25,7 @@ func NewDispatcher() (*Dispatcher, error) {
 func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessage) (*proto.EncryptedMessage, error) {
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("context cancelled")
+		return nil, errors.New("context cancelled")
 	default:
 		// Continue only if the context is still active
 	}
@@ -39,7 +40,7 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("context cancelled")
+		return nil, errors.New("context cancelled")
 	case ch <- msg:
 		return &proto.EncryptedMessage{}, nil
 	}
