@@ -14,11 +14,13 @@ import (
 type Dispatcher struct {
 	peerChannels map[string]chan *proto.EncryptedMessage
 	mu           sync.RWMutex
+	ctx          context.Context
 }
 
-func NewDispatcher() (*Dispatcher, error) {
+func NewDispatcher(ctx context.Context) (*Dispatcher, error) {
 	return &Dispatcher{
 		peerChannels: make(map[string]chan *proto.EncryptedMessage),
+		ctx:          ctx,
 	}, nil
 }
 
