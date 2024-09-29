@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/netbirdio/netbird/signal/proto"
 )
@@ -17,7 +18,7 @@ type Dispatcher struct {
 	ctx          context.Context
 }
 
-func NewDispatcher(ctx context.Context) (*Dispatcher, error) {
+func NewDispatcher(ctx context.Context, meter metric.Meter) (*Dispatcher, error) {
 	return &Dispatcher{
 		peerChannels: make(map[string]chan *proto.EncryptedMessage),
 		ctx:          ctx,
