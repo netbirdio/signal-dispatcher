@@ -33,6 +33,11 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 		// Continue only if the context is still active
 	}
 
+	if msg.RemoteKey == "dummy" {
+		// Test message send during netbird status
+		return &proto.EncryptedMessage{}, nil
+	}
+
 	d.mu.RLock()
 	ch, ok := d.peerChannels[msg.RemoteKey]
 	d.mu.RUnlock()
