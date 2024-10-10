@@ -42,6 +42,7 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 	d.mu.RUnlock()
 
 	if !ok {
+		log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
 		return &proto.EncryptedMessage{}, nil
 	}
 
