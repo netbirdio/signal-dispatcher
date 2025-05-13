@@ -37,9 +37,12 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 		return &proto.EncryptedMessage{}, nil
 	}
 
+	log.Tracef("message [%s] -> [%s], trying to get channel", msg.Key, msg.RemoteKey)
 	d.mu.RLock()
 	ch, ok := d.peerChannels[msg.RemoteKey]
 	d.mu.RUnlock()
+
+	log.Tracef("message [%s] -> [%s], trying got channel, with result [%v]", msg.Key, msg.RemoteKey, ok)
 
 	if !ok {
 		log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
@@ -49,7 +52,25 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 	select {
 	case <-ctx.Done():
 		return nil, errors.New("context cancelled")
-	case ch <- msg:
+	default:
+		var recovered bool
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Warnf("recovered from panic when sending message to peer [%s]: %v", msg.RemoteKey, r)
+					d.mu.Lock()
+					delete(d.peerChannels, msg.RemoteKey)
+					d.mu.Unlock()
+					log.Tracef("removed channel for [%s]", msg.RemoteKey)
+					recovered = true
+				}
+			}()
+			ch <- msg
+		}()
+
+		if recovered {
+			log.Debugf("channel was closed for peer [%s], message not delivered", msg.RemoteKey)
+		}
 		return &proto.EncryptedMessage{}, nil
 	}
 }
@@ -63,6 +84,7 @@ func (d *Dispatcher) ListenForMessages(ctx context.Context, id string, messageHa
 
 	go func() {
 		defer func() {
+			log.Tracef("started closing stream for %s", id)
 			d.mu.Lock()
 			close(ch)
 			delete(d.peerChannels, id)
