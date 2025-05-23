@@ -24,7 +24,7 @@ func NewDispatcher(ctx context.Context, meter metric.Meter) (*Dispatcher, error)
 	}, nil
 }
 
-func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessage) (*proto.EncryptedMessage, error) {
+func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessage) (message *proto.EncryptedMessage, err error) {
 	select {
 	case <-ctx.Done():
 		return nil, errors.New("context cancelled")
@@ -44,6 +44,20 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 		log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
 		return &proto.EncryptedMessage{}, nil
 	}
+
+	// Edge case: channel was closed after we took it from the map
+	// This will lead to panic -> should recover and ensure the channel is removed from the map
+	defer func() {
+		if r := recover(); r != nil {
+			log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
+			d.mu.Lock()
+			delete(d.peerChannels, msg.RemoteKey)
+			d.mu.Unlock()
+
+			message = &proto.EncryptedMessage{}
+			err = nil
+		}
+	}()
 
 	select {
 	case <-ctx.Done():
