@@ -24,7 +24,7 @@ func NewDispatcher(ctx context.Context, meter metric.Meter) (*Dispatcher, error)
 	}, nil
 }
 
-func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessage) (*proto.EncryptedMessage, error) {
+func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessage) (message *proto.EncryptedMessage, err error) {
 	select {
 	case <-ctx.Done():
 		return nil, errors.New("context cancelled")
@@ -37,40 +37,33 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 		return &proto.EncryptedMessage{}, nil
 	}
 
-	log.Tracef("message [%s] -> [%s], trying to get channel", msg.Key, msg.RemoteKey)
 	d.mu.RLock()
 	ch, ok := d.peerChannels[msg.RemoteKey]
 	d.mu.RUnlock()
-
-	log.Tracef("message [%s] -> [%s], trying got channel, with result [%v]", msg.Key, msg.RemoteKey, ok)
 
 	if !ok {
 		log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
 		return &proto.EncryptedMessage{}, nil
 	}
 
+	// Edge case: channel was closed after we took it from the map
+	// This will lead to panic -> should recover and ensure the channel is removed from the map
+	defer func() {
+		if r := recover(); r != nil {
+			log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
+			d.mu.Lock()
+			delete(d.peerChannels, msg.RemoteKey)
+			d.mu.Unlock()
+
+			message = &proto.EncryptedMessage{}
+			err = nil
+		}
+	}()
+
 	select {
 	case <-ctx.Done():
 		return nil, errors.New("context cancelled")
-	default:
-		var recovered bool
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Warnf("recovered from panic when sending message to peer [%s]: %v", msg.RemoteKey, r)
-					d.mu.Lock()
-					delete(d.peerChannels, msg.RemoteKey)
-					d.mu.Unlock()
-					log.Tracef("removed channel for [%s]", msg.RemoteKey)
-					recovered = true
-				}
-			}()
-			ch <- msg
-		}()
-
-		if recovered {
-			log.Debugf("channel was closed for peer [%s], message not delivered", msg.RemoteKey)
-		}
+	case ch <- msg:
 		return &proto.EncryptedMessage{}, nil
 	}
 }
@@ -84,7 +77,6 @@ func (d *Dispatcher) ListenForMessages(ctx context.Context, id string, messageHa
 
 	go func() {
 		defer func() {
-			log.Tracef("started closing stream for %s", id)
 			d.mu.Lock()
 			close(ch)
 			delete(d.peerChannels, id)
