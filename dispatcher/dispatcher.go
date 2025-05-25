@@ -29,7 +29,6 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 	case <-ctx.Done():
 		return nil, errors.New("context cancelled")
 	default:
-		// Continue only if the context is still active
 	}
 
 	if msg.RemoteKey == "dummy" {
@@ -68,7 +67,7 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 	}
 }
 
-func (d *Dispatcher) ListenForMessages(ctx context.Context, id string, messageHandler func(context.Context, *proto.EncryptedMessage)) {
+func (d *Dispatcher) ListenForMessages(ctx context.Context, id string, messageHandler func(context.Context, *proto.EncryptedMessage)) error {
 	ch := make(chan *proto.EncryptedMessage)
 
 	d.mu.Lock()
@@ -99,4 +98,6 @@ func (d *Dispatcher) ListenForMessages(ctx context.Context, id string, messageHa
 			}
 		}
 	}()
+
+	return nil
 }
