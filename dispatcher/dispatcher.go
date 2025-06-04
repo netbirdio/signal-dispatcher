@@ -12,16 +12,31 @@ import (
 )
 
 type Dispatcher struct {
-	peerChannels map[string]chan *proto.EncryptedMessage
+	peerChannels map[string]peerChan
 	mu           sync.RWMutex
 	ctx          context.Context
 }
 
+type peerChan struct {
+	ch     chan *proto.EncryptedMessage
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
 func NewDispatcher(ctx context.Context, meter metric.Meter) (*Dispatcher, error) {
 	return &Dispatcher{
-		peerChannels: make(map[string]chan *proto.EncryptedMessage),
+		peerChannels: make(map[string]peerChan),
 		ctx:          ctx,
 	}, nil
+}
+
+func newPeerChan(parentCtx context.Context) peerChan {
+	ctx, cancel := context.WithCancel(parentCtx)
+	return peerChan{
+		ch:     make(chan *proto.EncryptedMessage),
+		ctx:    ctx,
+		cancel: cancel,
+	}
 }
 
 func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessage) (*proto.EncryptedMessage, error) {
@@ -37,7 +52,7 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 	}
 
 	d.mu.RLock()
-	ch, ok := d.peerChannels[msg.RemoteKey]
+	peerChan, ok := d.peerChannels[msg.RemoteKey]
 	d.mu.RUnlock()
 
 	if !ok {
@@ -48,22 +63,29 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 	select {
 	case <-ctx.Done():
 		return nil, errors.New("context cancelled")
-	case ch <- msg:
+	case <-peerChan.ctx.Done():
+		// Channel was disconnected after we took it from the map
+		log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
+		return &proto.EncryptedMessage{}, nil
+	case peerChan.ch <- msg:
 		return &proto.EncryptedMessage{}, nil
 	}
 }
 
 func (d *Dispatcher) ListenForMessages(ctx context.Context, id string, messageHandler func(context.Context, *proto.EncryptedMessage)) error {
-	ch := make(chan *proto.EncryptedMessage)
+	peerChan := newPeerChan(ctx)
 
 	d.mu.Lock()
-	d.peerChannels[id] = ch
+	d.peerChannels[id] = peerChan
 	d.mu.Unlock()
 
 	go func() {
 		defer func() {
 			d.mu.Lock()
-			close(ch)
+			// Cancel the context in case if different goroutine already took channel from the map
+			// but didn't sent to it yet
+			peerChan.cancel()
+			close(peerChan.ch)
 			delete(d.peerChannels, id)
 			d.mu.Unlock()
 			log.Debugf("stream closed for peer %s", id)
@@ -73,7 +95,7 @@ func (d *Dispatcher) ListenForMessages(ctx context.Context, id string, messageHa
 			select {
 			case <-ctx.Done():
 				return
-			case msg, ok := <-ch:
+			case msg, ok := <-peerChan.ch:
 				if !ok {
 					// Channel was closed, exit the goroutine
 					return
