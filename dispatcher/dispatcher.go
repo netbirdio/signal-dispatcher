@@ -8,7 +8,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/netbirdio/netbird/signal/proto"
+	"github.com/netbirdio/netbird/shared/signal/proto"
 )
 
 type Dispatcher struct {
