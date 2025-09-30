@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/netbirdio/netbird/signal/server"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/grpc/codes"
@@ -13,6 +12,8 @@ import (
 
 	"github.com/netbirdio/netbird/shared/signal/proto"
 )
+
+var ErrPeerNotConnected = errors.New("peer not connected")
 
 type Dispatcher struct {
 	peerChannels map[string]peerChan
@@ -65,7 +66,7 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 
 	if !ok {
 		log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
-		return &proto.EncryptedMessage{}, server.ErrPeerNotConnected
+		return &proto.EncryptedMessage{}, ErrPeerNotConnected
 	}
 
 	req := &DispatchRequest{
@@ -79,7 +80,7 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 	case <-peerChan.ctx.Done():
 		// Channel was disconnected after we took it from the map
 		log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
-		return &proto.EncryptedMessage{}, server.ErrPeerNotConnected
+		return &proto.EncryptedMessage{}, ErrPeerNotConnected
 	case peerChan.ch <- req:
 		if !awaitResponse {
 			return &proto.EncryptedMessage{}, nil
