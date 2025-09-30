@@ -13,6 +13,8 @@ import (
 	"github.com/netbirdio/netbird/shared/signal/proto"
 )
 
+var ErrPeerNotConnected = errors.New("peer not connected")
+
 type Dispatcher struct {
 	peerChannels map[string]peerChan
 	mu           sync.RWMutex
@@ -64,7 +66,7 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 
 	if !ok {
 		log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
-		return &proto.EncryptedMessage{}, status.Errorf(codes.NotFound, "remote peer not connected")
+		return &proto.EncryptedMessage{}, ErrPeerNotConnected
 	}
 
 	req := &DispatchRequest{
@@ -78,7 +80,7 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 	case <-peerChan.ctx.Done():
 		// Channel was disconnected after we took it from the map
 		log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
-		return &proto.EncryptedMessage{}, status.Errorf(codes.Aborted, "remote peer disconnected")
+		return &proto.EncryptedMessage{}, ErrPeerNotConnected
 	case peerChan.ch <- req:
 		if !awaitResponse {
 			return &proto.EncryptedMessage{}, nil
