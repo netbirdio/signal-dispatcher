@@ -7,6 +7,8 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/metric"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netbirdio/netbird/shared/signal/proto"
 )
@@ -17,8 +19,13 @@ type Dispatcher struct {
 	ctx          context.Context
 }
 
+type DispatchRequest struct {
+	Msg  *proto.EncryptedMessage
+	Resp chan error
+}
+
 type peerChan struct {
-	ch     chan *proto.EncryptedMessage
+	ch     chan *DispatchRequest
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -33,13 +40,13 @@ func NewDispatcher(ctx context.Context, meter metric.Meter) (*Dispatcher, error)
 func newPeerChan(parentCtx context.Context) peerChan {
 	ctx, cancel := context.WithCancel(parentCtx)
 	return peerChan{
-		ch:     make(chan *proto.EncryptedMessage),
+		ch:     make(chan *DispatchRequest),
 		ctx:    ctx,
 		cancel: cancel,
 	}
 }
 
-func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessage) (*proto.EncryptedMessage, error) {
+func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessage, awaitResponse bool) (*proto.EncryptedMessage, error) {
 	select {
 	case <-ctx.Done():
 		return nil, errors.New("context cancelled")
@@ -57,22 +64,39 @@ func (d *Dispatcher) SendMessage(ctx context.Context, msg *proto.EncryptedMessag
 
 	if !ok {
 		log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
-		return &proto.EncryptedMessage{}, nil
+		return &proto.EncryptedMessage{}, status.Errorf(codes.NotFound, "remote peer not connected")
+	}
+
+	req := &DispatchRequest{
+		Msg:  msg,
+		Resp: make(chan error, 1),
 	}
 
 	select {
 	case <-ctx.Done():
-		return nil, errors.New("context cancelled")
+		return nil, status.Errorf(codes.Aborted, "context cancelled")
 	case <-peerChan.ctx.Done():
 		// Channel was disconnected after we took it from the map
 		log.Tracef("message from peer [%s] can't be forwarded to peer [%s] because destination peer is not connected", msg.Key, msg.RemoteKey)
-		return &proto.EncryptedMessage{}, nil
-	case peerChan.ch <- msg:
-		return &proto.EncryptedMessage{}, nil
+		return &proto.EncryptedMessage{}, status.Errorf(codes.Aborted, "remote peer disconnected")
+	case peerChan.ch <- req:
+		if !awaitResponse {
+			return &proto.EncryptedMessage{}, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, status.Errorf(codes.DeadlineExceeded, "timeout waiting for ack")
+		case err := <-req.Resp:
+			if err != nil {
+				return nil, err
+			}
+			return &proto.EncryptedMessage{}, nil
+		}
 	}
 }
 
-func (d *Dispatcher) ListenForMessages(ctx context.Context, id string, messageHandler func(context.Context, *proto.EncryptedMessage)) error {
+func (d *Dispatcher) ListenForMessages(ctx context.Context, id string, messageHandler func(context.Context, *proto.EncryptedMessage) error) error {
 	peerChan := newPeerChan(ctx)
 
 	d.mu.Lock()
@@ -95,13 +119,17 @@ func (d *Dispatcher) ListenForMessages(ctx context.Context, id string, messageHa
 			select {
 			case <-ctx.Done():
 				return
-			case msg, ok := <-peerChan.ch:
+			case req, ok := <-peerChan.ch:
 				if !ok {
 					// Channel was closed, exit the goroutine
 					return
 				}
-				if msg != nil {
-					messageHandler(ctx, msg)
+				if req != nil {
+					err := messageHandler(ctx, req.Msg)
+					select {
+					case req.Resp <- err:
+					default:
+					}
 				}
 			}
 		}
