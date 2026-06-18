@@ -110,7 +110,7 @@ func (d *Dispatcher) ListenForMessages(ctx context.Context, id string, messageHa
 			// but didn't sent to it yet
 			peerChan.cancel()
 			close(peerChan.ch)
-			if c, ok := d.peerChannels[id]; ok && c.ch != peerChan.ch { // only delete the peerChan if it's ours
+			if c, ok := d.peerChannels[id]; ok && c.ch == peerChan.ch { // only delete the peerChan if it's ours
 				delete(d.peerChannels, id)
 			}
 			d.mu.Unlock()
